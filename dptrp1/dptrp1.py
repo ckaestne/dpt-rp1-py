@@ -370,9 +370,52 @@ class DigitalPaper:
         data = self.traverse_folder_recursively("Document")
         return data
 
-    def list_all(self):
-        data = self._get_endpoint("/documents2?entry_type=all").json()
-        return data["entry_list"]
+    def paginate(self, endpoint, params=None, pagesize=1000):
+        if params is None:
+            params = {}
+        params["limit"] = pagesize
+        offset = 0
+        all_entries = []
+
+        # Start with the first page to get both data and total count
+        params["offset"] = offset
+        data = self._get_endpoint(endpoint + "?" + "&".join(f"{k}={v}" for k, v in params.items())).json()
+        total_count = data["count"]
+        entries = data["entry_list"]
+        all_entries.extend(entries)
+
+        # If we got fewer entries than requested, we've got everything
+        if len(entries) < pagesize:
+            if len(all_entries) != total_count:
+                raise ValueError(f"Expected {total_count} entries, but got {len(all_entries)}")
+            return all_entries
+
+        offset += pagesize
+
+        # Continue fetching remaining pages if needed
+        while offset < total_count:
+            params["offset"] = offset
+            data = self._get_endpoint(endpoint + "?" + "&".join(f"{k}={v}" for k, v in params.items())).json()
+            entries = data["entry_list"]
+            all_entries.extend(entries)
+
+            # If we got fewer entries than requested, we've reached the end
+            if len(entries) < pagesize:
+                break
+
+            offset += pagesize
+
+        # Verify that we got the expected total count
+        if len(all_entries) != total_count:
+            raise ValueError(f"Expected {total_count} entries, but got {len(all_entries)}")
+
+        return all_entries
+
+    def list_all(self, fields=[]):
+        params = {"entry_type": "all"}
+        if fields:
+            params["fields"] = ",".join(fields)
+        return self.paginate("/documents2", params=params)
 
     def list_objects_in_folder(self, remote_path):
         remote_id = self._get_object_id(remote_path)
@@ -384,25 +427,7 @@ class DigitalPaper:
         return response.json()["entry_list"]
 
     def traverse_folder(self, remote_path, fields=[]):
-        # In most cases, the request overhead of traversing folders is larger than the overhead of
-        # requesting all info. So let's just request all info and filter for remote_path on our side
-        if fields:
-            field_query = "&fields=" + ",".join(fields)
-        else:
-            field_query = ""
-        entry_data = self._get_endpoint(
-            f"/documents2?entry_type=all" + field_query
-        ).json()
-
-        if entry_data.get("count") != len(entry_data.get("entry_list", [])):
-            # The device seems to not want to return more than 1300 items in the entry_list, meaning that we will miss entries if the device
-            # has more files/folders than this. Luckly, it can easily be detected by comparing the number of entries with the count.
-            # Perhaps there is some way to request the remaining entries from the same endpoint through some form of pagination,
-            # but we do not know how. Let's fall back to the slower recursive traversal
-            print("Warning: Fast folder traversal did not work. Falling back to slower, recursive folder traversal.")
-            return self.traverse_folder_recursively(remote_path)
-        
-        all_entries = entry_data["entry_list"]
+        all_entries = self.list_all(fields) 
 
         return list(
             filter(lambda e: e["entry_path"].startswith(remote_path), all_entries)
@@ -417,9 +442,7 @@ class DigitalPaper:
             if obj['entry_type'] == 'document':
                 return [obj]
             else:
-                children = self \
-                  ._get_endpoint("/folders/{remote_id}/entries2".format(remote_id = obj['entry_id'])) \
-                  .json()['entry_list']
+                children = self.paginate(f"/folders/{obj['entry_id']}/entries2")
                 return [obj] + functools.reduce(lambda acc, c: traverse(c) + acc, children[::-1], [])
         return traverse(self._resolve_object_by_path(remote_path))
 
