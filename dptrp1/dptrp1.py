@@ -203,17 +203,25 @@ class DigitalPaper:
 
         n1 = base64.b64decode(m1["a"])
         mac = base64.b64decode(m1["b"])
+        # Keep the device's exact bytes for yb. The DPT-RP1 is a Java device and
+        # builds its own HMACs using yb as BigInteger.toByteArray() produced it,
+        # which prepends a 0x00 sign byte whenever yb's most significant bit is
+        # set -- so yb is 257 bytes, not 256, roughly half the time. Re-encoding
+        # yb to a fixed 256 bytes here makes our HMAC input disagree with the
+        # device precisely in that case, and the device then rejects M2 with
+        # HTTP 403 "Bad parameters for registration process". Using the raw bytes
+        # the device sent always matches its own representation; only the
+        # Diffie-Hellman shared-key computation needs the integer form.
         yb = base64.b64decode(m1["c"])
-        yb = int.from_bytes(yb, "big")
+        yb_int = int.from_bytes(yb, "big")
         n2 = os.urandom(16)  # random nonce
 
         dh = DiffieHellman()
         ya = dh.gen_public_key()
         ya = b"\x00" + ya.to_bytes(256, "big")
 
-        zz = dh.gen_shared_key(yb)
+        zz = dh.gen_shared_key(yb_int)
         zz = zz.to_bytes(256, "big")
-        yb = yb.to_bytes(256, "big")
 
         derivedKey = PBKDF2(
             passphrase=zz, salt=n1 + mac + n2, iterations=10000, digestmodule=SHA256
