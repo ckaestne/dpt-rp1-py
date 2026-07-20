@@ -12,6 +12,24 @@ pip3 install dpt-rp1-py
 
 Installing the package also installs the command line utilities `dptrp1` and `dptmount`. To install the library from the sources, clone this repository, then run `python3 setup.py install` or `pip3 install .` from the root directory. To install as a developer use `python3 setup.py develop` (see [the setuptools docs](http://setuptools.readthedocs.io/en/latest/setuptools.html#development-mode)) and work on the source as usual.
 
+### Installing from source with pipx (recommended on Debian/Ubuntu)
+On modern Debian/Ubuntu (and other distributions that follow [PEP 668](https://peps.python.org/pep-0668/)) a plain `pip3 install .` into the system Python is refused with an `externally-managed-environment` error. The cleanest way to get the CLI on your `PATH` is [pipx](https://pipx.pypa.io/), which puts the package in its own isolated virtual environment:
+
+```
+sudo apt install pipx      # if you don't already have it
+pipx install .             # run from the repo root
+```
+
+This installs the `dptrp1` and `dptmount` commands globally under `~/.local/bin`.
+
+**Workaround for Python 3.12+:** the transitive dependency `httpsig` still imports `pkg_resources`, which setuptools 81 (mid-2025) removed. If `dptrp1 --help` fails with `ModuleNotFoundError: No module named 'pkg_resources'`, inject an older setuptools into the pipx venv:
+
+```
+pipx inject dpt-rp1-py 'setuptools<81'
+```
+
+Do the injection **after** the last `pipx install` — a subsequent `pipx install --force` rebuilds the venv and wipes any injected packages.
+
 ## Using the command line utility
 The command line utility requires a connection to the reader via WiFi, Bluetooth, or USB. The USB connection works on Windows and MacOS but may not work on a Linux machine.
 
@@ -108,6 +126,29 @@ You can get a list of the implemented commands by running `dptrp1` with no addit
 You can get additional information about a specific command by calling `dptrp1 help <command>`, e.g. `dptrp1 help sync`.
 
 Note that the root path for DPT-RP1 is always `Document/`, which is misleadingly displayed as "System Storage" on the device. To download a document called _file.pdf_ from a folder called _Articles_ of the DPT-RP1, the correct command is `dptrp1 download Document/Articles/file.pdf`.
+
+#### One-way mirror commands (`sync-from-device` / `sync-to-device`)
+The `sync` command tries to be clever about merging changes on both sides, which is helpful when you only add or edit files but gets confused when you _reorganize_ (a locally moved file looks indistinguishable from "delete here + create there"). For that workflow, two one-way mirror commands are provided:
+
+* `dptrp1 sync-from-device <local_path> [<remote_path>]` — makes the local folder match the device. Downloads new/changed PDFs and **deletes** local PDFs and empty folders that are not on the device.
+* `dptrp1 sync-to-device <local_path> [<remote_path>]` — makes the device match the local folder. Uploads new/changed PDFs and **deletes** PDFs and empty folders on the device that are not present locally.
+
+Both commands print the planned changes and ask for confirmation before touching any file. At the prompt you can answer:
+
+* `y` — apply every change
+* `n` — abort without doing anything
+* `d` — apply the transfers (downloads/uploads and folder creation) but **skip the deletes**, so files that only exist on one side stay put. Use this for an additive pull/push, e.g. when you added PDFs on the device that you want to fetch without losing the local files you've been reorganizing.
+* `?` — list every affected file, then ask again
+
+Pass the top-level `-y` flag to skip the prompt (e.g. `dptrp1 -y sync-to-device ...`); `-y` always answers `y` (the full mirror). Unlike `sync`, these commands do not use a `.sync` checkpoint file; they compare modification times directly.
+
+A typical reorganize workflow:
+
+```
+dptrp1 sync-from-device ~/Papers Document/Papers   # pull annotations
+# move files around in ~/Papers on your computer
+dptrp1 sync-to-device   ~/Papers Document/Papers   # push the new layout
+```
 
 ### Registering the DPT-RP1
 The DPT-RP1 uses SSL encryption to communicate with the computer.  This requires registering the DPT-RP1 with the computer, which results in two pieces of information, the client ID and the private key. If you have used Sony's Digital Paper App on the same computer, the utility will automatically try to use the existing credentials. If you do not have the Digital Paper App, use the _register_ command.
