@@ -12,6 +12,24 @@ pip3 install dpt-rp1-py
 
 Installing the package also installs the command line utilities `dptrp1` and `dptmount`. To install the library from the sources, clone this repository, then run `python3 setup.py install` or `pip3 install .` from the root directory. To install as a developer use `python3 setup.py develop` (see [the setuptools docs](http://setuptools.readthedocs.io/en/latest/setuptools.html#development-mode)) and work on the source as usual.
 
+### Installing from source with pipx (recommended on Debian/Ubuntu)
+On modern Debian/Ubuntu (and other distributions that follow [PEP 668](https://peps.python.org/pep-0668/)) a plain `pip3 install .` into the system Python is refused with an `externally-managed-environment` error. The cleanest way to get the CLI on your `PATH` is [pipx](https://pipx.pypa.io/), which puts the package in its own isolated virtual environment:
+
+```
+sudo apt install pipx      # if you don't already have it
+pipx install .             # run from the repo root
+```
+
+This installs the `dptrp1` and `dptmount` commands globally under `~/.local/bin`.
+
+**Workaround for Python 3.12+:** the transitive dependency `httpsig` still imports `pkg_resources`, which setuptools 81 (mid-2025) removed. If `dptrp1 --help` fails with `ModuleNotFoundError: No module named 'pkg_resources'`, inject an older setuptools into the pipx venv:
+
+```
+pipx inject dpt-rp1-py 'setuptools<81'
+```
+
+Do the injection **after** the last `pipx install` — a subsequent `pipx install --force` rebuilds the venv and wipes any injected packages.
+
 ## Using the command line utility
 The command line utility requires a connection to the reader via WiFi, Bluetooth, or USB. The USB connection works on Windows and MacOS but may not work on a Linux machine.
 
