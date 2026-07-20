@@ -109,6 +109,22 @@ You can get additional information about a specific command by calling `dptrp1 h
 
 Note that the root path for DPT-RP1 is always `Document/`, which is misleadingly displayed as "System Storage" on the device. To download a document called _file.pdf_ from a folder called _Articles_ of the DPT-RP1, the correct command is `dptrp1 download Document/Articles/file.pdf`.
 
+#### One-way mirror commands (`sync-from-device` / `sync-to-device`)
+The `sync` command tries to be clever about merging changes on both sides, which is helpful when you only add or edit files but gets confused when you _reorganize_ (a locally moved file looks indistinguishable from "delete here + create there"). For that workflow, two one-way mirror commands are provided:
+
+* `dptrp1 sync-from-device <local_path> [<remote_path>]` — makes the local folder match the device. Downloads new/changed PDFs and **deletes** local PDFs and empty folders that are not on the device.
+* `dptrp1 sync-to-device <local_path> [<remote_path>]` — makes the device match the local folder. Uploads new/changed PDFs and **deletes** PDFs and empty folders on the device that are not present locally.
+
+Both commands print the planned changes and ask for confirmation before touching any file. Type `?` at the prompt to list every affected file. Pass the top-level `-y` flag to skip the prompt (e.g. `dptrp1 -y sync-to-device ...`). Unlike `sync`, these commands do not use a `.sync` checkpoint file; they compare modification times directly.
+
+A typical reorganize workflow:
+
+```
+dptrp1 sync-from-device ~/Papers Document/Papers   # pull annotations
+# move files around in ~/Papers on your computer
+dptrp1 sync-to-device   ~/Papers Document/Papers   # push the new layout
+```
+
 ### Registering the DPT-RP1
 The DPT-RP1 uses SSL encryption to communicate with the computer.  This requires registering the DPT-RP1 with the computer, which results in two pieces of information, the client ID and the private key. If you have used Sony's Digital Paper App on the same computer, the utility will automatically try to use the existing credentials. If you do not have the Digital Paper App, use the _register_ command.
 

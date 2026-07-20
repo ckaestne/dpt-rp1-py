@@ -142,6 +142,39 @@ def do_sync(d, local_path, remote_path="Document"):
     d.sync(local_path, remote_path)
 
 
+def do_sync_from_device(d, local_path, remote_path="Document"):
+    """
+    One-way mirror: make the local folder match the device.
+
+    Downloads new or changed PDFs from the device and DELETES local PDFs and
+    empty folders that are not present on the device. Useful when the device
+    is the source of truth (for example, after annotating on the device).
+
+    The planned changes are printed and confirmation is requested before
+    anything happens. Pass -y (top-level) to skip the prompt.
+
+    Example: dptrp1 sync-from-device ~/Dropbox/Papers Document/Papers
+    """
+    d.force_sync_to_local(local_path, remote_path)
+
+
+def do_sync_to_device(d, local_path, remote_path="Document"):
+    """
+    One-way mirror: make the device match the local folder.
+
+    Uploads new or changed PDFs to the device and DELETES PDFs and empty
+    folders on the device that are not present locally. Useful when your
+    local folder is the source of truth (for example, after re-organizing
+    files locally).
+
+    The planned changes are printed and confirmation is requested before
+    anything happens. Pass -y (top-level) to skip the prompt.
+
+    Example: dptrp1 sync-to-device ~/Dropbox/Papers Document/Papers
+    """
+    d.force_sync_to_device(local_path, remote_path)
+
+
 def do_new_folder(d, remote_path):
     d.new_folder(add_prefix(remote_path))
 
@@ -286,6 +319,8 @@ commands = {
     "register": do_register,
     "update-firmware": do_update_firmware,
     "sync": do_sync,
+    "sync-from-device": do_sync_from_device,
+    "sync-to-device": do_sync_to_device,
     "help": do_help,
     "display-document": do_display_document,
     "get-configuration": do_get_config,

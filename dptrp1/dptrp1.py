@@ -15,7 +15,7 @@ from tqdm import tqdm
 from glob import glob
 from urllib.parse import quote_plus
 from dptrp1.pyDH import DiffieHellman
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pbkdf2 import PBKDF2
 from Crypto.Hash import SHA256
 from Crypto.Hash.HMAC import HMAC
@@ -943,6 +943,299 @@ class DigitalPaper:
         checkpoint_file = os.path.join(local_folder, ".sync")
         with open(checkpoint_file, "wb") as f:
             pickle.dump(doclist, f)
+
+    def _mirror_inventory(self, local_folder, remote_folder):
+        """
+        Build normalized inventories of PDF files and folders under
+        remote_folder on the device and under local_folder on disk.
+
+        Returns (remote_files, remote_folders, local_files, local_folders)
+        where the *_files entries map remote-style path -> UTC datetime and
+        the *_folders entries are sets of remote-style paths.
+        """
+        def normalize_path(path):
+            return unicodedata.normalize("NFC", path).replace(os.sep, "/")
+
+        remote_info = self.traverse_folder(
+            remote_folder, fields=["entry_path", "modified_date", "entry_type"]
+        )
+        remote_files = {}
+        remote_folders = set()
+        for f in remote_info:
+            path = normalize_path(f["entry_path"])
+            if not path.startswith(remote_folder):
+                continue
+            if f["entry_type"] == "document":
+                if not path.lower().endswith(".pdf"):
+                    continue
+                remote_files[path] = datetime.strptime(
+                    f["modified_date"], "%Y-%m-%dT%H:%M:%SZ"
+                )
+            elif f["entry_type"] == "folder":
+                remote_folders.add(path)
+
+        local_files = {}
+        local_folders = set()
+
+        def walk(path):
+            rel = Path(path).relative_to(local_folder)
+            rp = normalize_path((Path(remote_folder) / rel).as_posix())
+            local_folders.add(rp)
+            for entry in os.scandir(path):
+                if entry.is_dir():
+                    walk(entry.path)
+                elif entry.name.lower().endswith(".pdf") and not entry.name.startswith("."):
+                    erel = Path(entry.path).relative_to(local_folder)
+                    erp = normalize_path((Path(remote_folder) / erel).as_posix())
+                    local_files[erp] = datetime.utcfromtimestamp(
+                        entry.stat().st_mtime
+                    )
+
+        walk(local_folder)
+        return remote_files, remote_folders, local_files, local_folders
+
+    def _confirm_mirror(self, actions):
+        """
+        Print a summary of the planned actions and ask the user to confirm.
+        Returns True to proceed, False to abort. Returns None if there is
+        nothing to do.
+        """
+        total = sum(len(items) for items, _ in actions)
+        if total == 0:
+            print("Already in sync. Nothing to do.")
+            return None
+        print("")
+        print("Planned changes:")
+        for items, description in actions:
+            if items:
+                print(f"  {len(items):4d} {description}")
+        print("")
+        if self.assume_yes:
+            return True
+        while True:
+            confirm = input("Proceed (y/n/?)? ").strip().lower()
+            if confirm in ("y", "yes"):
+                return True
+            if confirm in ("n", "no", ""):
+                return False
+            if confirm in ("?", "list", "l"):
+                for items, description in actions:
+                    if items:
+                        print("")
+                        print(f"The following will be {description}:")
+                        print("\t" + "\n\t".join(items))
+                        print("")
+
+    def force_sync_to_local(self, local_folder, remote_folder="Document"):
+        """
+        One-way mirror: make the local folder match the device.
+
+        Downloads files whose modification time differs from the local copy
+        and DELETES local files and (empty) folders that do not exist on
+        the device. Only .pdf files are considered, matching `sync`.
+
+        A plan is printed and the user is asked to confirm before any
+        change is made, unless -y was passed on the command line.
+        """
+        self.set_datetime()
+        os.makedirs(local_folder, exist_ok=True)
+        self.new_folder(remote_folder)
+        print("Building inventory... ", end="", flush=True)
+        remote_files, remote_folders, local_files, local_folders = (
+            self._mirror_inventory(local_folder, remote_folder)
+        )
+        print("done")
+
+        tolerance = timedelta(seconds=2)
+        to_download = sorted(
+            path
+            for path, rmtime in remote_files.items()
+            if local_files.get(path) is None
+            or abs(rmtime - local_files[path]) > tolerance
+        )
+        to_delete_local = sorted(p for p in local_files if p not in remote_files)
+        folders_to_create_local = sorted(
+            f for f in remote_folders if f not in local_folders
+        )
+        folders_to_delete_local = sorted(
+            (
+                f
+                for f in local_folders
+                if f not in remote_folders and f != remote_folder
+            ),
+            reverse=True,
+        )
+
+        actions = [
+            (to_delete_local, "files DELETED locally"),
+            (folders_to_delete_local, "folders DELETED locally"),
+            (folders_to_create_local, "folders CREATED locally"),
+            (to_download, "files DOWNLOADED from device"),
+        ]
+        proceed = self._confirm_mirror(actions)
+        if not proceed:
+            return
+
+        progress = tqdm(
+            total=sum(len(items) for items, _ in actions),
+            desc="Mirroring",
+            unit="items",
+        )
+        for remote_path in to_delete_local:
+            rel = Path(remote_path).relative_to(remote_folder)
+            local_path = Path(local_folder) / rel
+            if local_path.exists():
+                tqdm.write("X " + str(local_path))
+                os.remove(local_path)
+            progress.update()
+        for remote_path in folders_to_delete_local:
+            rel = Path(remote_path).relative_to(remote_folder)
+            local_path = Path(local_folder) / rel
+            if local_path.exists():
+                tqdm.write("X " + str(local_path))
+                try:
+                    os.rmdir(local_path)
+                except OSError as e:
+                    tqdm.write(
+                        f"WARNING: could not remove folder {local_path}: {e}"
+                    )
+            progress.update()
+        for remote_path in folders_to_create_local:
+            rel = Path(remote_path).relative_to(remote_folder)
+            local_path = Path(local_folder) / rel
+            tqdm.write("+ " + str(local_path))
+            os.makedirs(local_path, exist_ok=True)
+            progress.update()
+        for remote_path in to_download:
+            rel = Path(remote_path).relative_to(remote_folder)
+            local_path = Path(local_folder) / rel
+            tqdm.write("⇣ " + str(remote_path))
+            self.download_file(remote_path, local_path)
+            remote_time_local = (
+                remote_files[remote_path]
+                .replace(tzinfo=timezone.utc)
+                .astimezone(tz=None)
+            )
+            mod_time = time.mktime(remote_time_local.timetuple())
+            os.utime(local_path, (mod_time, mod_time))
+            progress.update()
+        progress.close()
+
+    def force_sync_to_device(self, local_folder, remote_folder="Document"):
+        """
+        One-way mirror: make the device match the local folder.
+
+        Uploads local files whose modification time differs from the device
+        copy and DELETES files and (empty) folders on the device that are
+        not present locally. Only .pdf files are considered, matching
+        `sync`.
+
+        A plan is printed and the user is asked to confirm before any
+        change is made, unless -y was passed on the command line.
+        """
+        self.set_datetime()
+        self.new_folder(remote_folder)
+        print("Building inventory... ", end="", flush=True)
+        remote_files, remote_folders, local_files, local_folders = (
+            self._mirror_inventory(local_folder, remote_folder)
+        )
+        print("done")
+
+        tolerance = timedelta(seconds=2)
+        to_upload = sorted(
+            path
+            for path, lmtime in local_files.items()
+            if remote_files.get(path) is None
+            or abs(lmtime - remote_files[path]) > tolerance
+        )
+        to_delete_remote = sorted(p for p in remote_files if p not in local_files)
+        folders_to_create_remote = sorted(
+            f for f in local_folders if f not in remote_folders
+        )
+        folders_to_delete_remote = sorted(
+            (
+                f
+                for f in remote_folders
+                if f not in local_folders and f != remote_folder
+            ),
+            reverse=True,
+        )
+
+        actions = [
+            (to_delete_remote, "files DELETED on device"),
+            (folders_to_delete_remote, "folders DELETED on device"),
+            (folders_to_create_remote, "folders CREATED on device"),
+            (to_upload, "files UPLOADED to device"),
+        ]
+        proceed = self._confirm_mirror(actions)
+        if not proceed:
+            return
+
+        progress = tqdm(
+            total=sum(len(items) for items, _ in actions),
+            desc="Mirroring",
+            unit="items",
+        )
+        for remote_path in to_delete_remote:
+            if self.path_exists(remote_path):
+                tqdm.write("X " + str(remote_path))
+                self.delete_document(remote_path)
+            progress.update()
+        for remote_path in folders_to_delete_remote:
+            if self.path_exists(remote_path):
+                tqdm.write("X " + str(remote_path))
+                try:
+                    self.delete_folder(remote_path)
+                except Exception as e:
+                    tqdm.write(
+                        f"WARNING: could not remove folder {remote_path}: {e}"
+                    )
+            progress.update()
+        for remote_path in folders_to_create_remote:
+            tqdm.write("+ " + str(remote_path))
+            self.new_folder(remote_path)
+            progress.update()
+        for remote_path in to_upload:
+            rel = Path(remote_path).relative_to(remote_folder)
+            local_path = Path(local_folder) / rel
+            tqdm.write("⇡ " + str(local_path))
+            self.upload_file(local_path, remote_path)
+            progress.update()
+        progress.close()
+
+        # After upload the device stamps its own modified_date, which will
+        # differ from the local mtime and cause the next run to re-upload
+        # the same file. Align local mtimes to the fresh remote timestamps
+        # so subsequent runs stabilize to a no-op.
+        if to_upload:
+            print("Aligning local timestamps... ", end="", flush=True)
+            refreshed = self.traverse_folder(
+                remote_folder,
+                fields=["entry_path", "modified_date", "entry_type"],
+            )
+            by_path = {}
+            for f in refreshed:
+                if f["entry_type"] == "document":
+                    p = unicodedata.normalize("NFC", f["entry_path"]).replace(
+                        os.sep, "/"
+                    )
+                    by_path[p] = f["modified_date"]
+            for remote_path in to_upload:
+                rel = Path(remote_path).relative_to(remote_folder)
+                local_path = Path(local_folder) / rel
+                new_mdate = by_path.get(remote_path)
+                if new_mdate is None:
+                    continue
+                remote_time = datetime.strptime(new_mdate, "%Y-%m-%dT%H:%M:%SZ")
+                remote_time_local = remote_time.replace(
+                    tzinfo=timezone.utc
+                ).astimezone(tz=None)
+                mod_time = time.mktime(remote_time_local.timetuple())
+                try:
+                    os.utime(local_path, (mod_time, mod_time))
+                except OSError:
+                    pass
+            print("done")
 
     def _copy_move_data(self, file_id, folder_id, new_filename=None):
         data = {"parent_folder_id": folder_id}
