@@ -133,7 +133,14 @@ The `sync` command tries to be clever about merging changes on both sides, which
 * `dptrp1 sync-from-device <local_path> [<remote_path>]` — makes the local folder match the device. Downloads new/changed PDFs and **deletes** local PDFs and empty folders that are not on the device.
 * `dptrp1 sync-to-device <local_path> [<remote_path>]` — makes the device match the local folder. Uploads new/changed PDFs and **deletes** PDFs and empty folders on the device that are not present locally.
 
-Both commands print the planned changes and ask for confirmation before touching any file. Type `?` at the prompt to list every affected file. Pass the top-level `-y` flag to skip the prompt (e.g. `dptrp1 -y sync-to-device ...`). Unlike `sync`, these commands do not use a `.sync` checkpoint file; they compare modification times directly.
+Both commands print the planned changes and ask for confirmation before touching any file. At the prompt you can answer:
+
+* `y` — apply every change
+* `n` — abort without doing anything
+* `d` — apply the transfers (downloads/uploads and folder creation) but **skip the deletes**, so files that only exist on one side stay put. Use this for an additive pull/push, e.g. when you added PDFs on the device that you want to fetch without losing the local files you've been reorganizing.
+* `?` — list every affected file, then ask again
+
+Pass the top-level `-y` flag to skip the prompt (e.g. `dptrp1 -y sync-to-device ...`); `-y` always answers `y` (the full mirror). Unlike `sync`, these commands do not use a `.sync` checkpoint file; they compare modification times directly.
 
 A typical reorganize workflow:
 

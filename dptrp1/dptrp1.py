@@ -997,17 +997,23 @@ class DigitalPaper:
     def _confirm_mirror(self, actions):
         """
         Print a summary of the planned actions and ask the user to confirm.
-        Returns True to proceed, False to abort. Returns None if there is
-        nothing to do.
+        Each action is a tuple (items, description, destructive) where
+        `destructive` is True for delete-style actions.
+
+        Returns True to proceed, False to abort, or None if there is
+        nothing to do. If the user answers `d` (skip deletes), all
+        destructive action lists are emptied in place before True is
+        returned, so the caller's own lists (which are the same objects)
+        become empty and their loops skip.
         """
-        total = sum(len(items) for items, _ in actions)
+        total = sum(len(items) for items, _, _ in actions)
         if total == 0:
             print("Already in sync. Nothing to do.")
             return None
         preview = 5
         print("")
         print("Planned changes:")
-        for items, description in actions:
+        for items, description, _ in actions:
             if not items:
                 continue
             print(f"  {len(items):4d} {description}:")
@@ -1018,14 +1024,36 @@ class DigitalPaper:
         print("")
         if self.assume_yes:
             return True
+
+        has_destructive = any(
+            destructive and items for items, _, destructive in actions
+        )
+        if has_destructive:
+            print("  y   yes, apply every change above")
+            print("  n   no, abort without doing anything")
+            print("  d   apply transfers only, skip the deletes")
+            print("  ?   list every affected file, then ask again")
+            prompt = "Proceed (y/n/d/?)? "
+        else:
+            print("  y   yes, apply every change above")
+            print("  n   no, abort without doing anything")
+            print("  ?   list every affected file, then ask again")
+            prompt = "Proceed (y/n/?)? "
+
         while True:
-            confirm = input("Proceed (y/n/?)? ").strip().lower()
+            confirm = input(prompt).strip().lower()
             if confirm in ("y", "yes"):
                 return True
             if confirm in ("n", "no", ""):
                 return False
+            if has_destructive and confirm in ("d", "delete-skip", "no-delete"):
+                for items, _, destructive in actions:
+                    if destructive:
+                        items.clear()
+                print("Skipping deletes; will only transfer files.")
+                return True
             if confirm in ("?", "list", "l"):
-                for items, description in actions:
+                for items, description, _ in actions:
                     if items:
                         print("")
                         print(f"The following will be {description}:")
@@ -1041,7 +1069,9 @@ class DigitalPaper:
         the device. Only .pdf files are considered, matching `sync`.
 
         A plan is printed and the user is asked to confirm before any
-        change is made, unless -y was passed on the command line.
+        change is made, unless -y was passed on the command line. At the
+        prompt, answering `d` proceeds with the transfers but skips the
+        delete actions (additive pull).
         """
         self.set_datetime()
         os.makedirs(local_folder, exist_ok=True)
@@ -1073,17 +1103,17 @@ class DigitalPaper:
         )
 
         actions = [
-            (to_delete_local, "files DELETED locally"),
-            (folders_to_delete_local, "folders DELETED locally"),
-            (folders_to_create_local, "folders CREATED locally"),
-            (to_download, "files DOWNLOADED from device"),
+            (to_delete_local, "files DELETED locally", True),
+            (folders_to_delete_local, "folders DELETED locally", True),
+            (folders_to_create_local, "folders CREATED locally", False),
+            (to_download, "files DOWNLOADED from device", False),
         ]
         proceed = self._confirm_mirror(actions)
         if not proceed:
             return
 
         progress = tqdm(
-            total=sum(len(items) for items, _ in actions),
+            total=sum(len(items) for items, _, _ in actions),
             desc="Mirroring",
             unit="items",
         )
@@ -1137,7 +1167,9 @@ class DigitalPaper:
         `sync`.
 
         A plan is printed and the user is asked to confirm before any
-        change is made, unless -y was passed on the command line.
+        change is made, unless -y was passed on the command line. At the
+        prompt, answering `d` proceeds with the transfers but skips the
+        delete actions (additive push).
         """
         self.set_datetime()
         self.new_folder(remote_folder)
@@ -1168,17 +1200,17 @@ class DigitalPaper:
         )
 
         actions = [
-            (to_delete_remote, "files DELETED on device"),
-            (folders_to_delete_remote, "folders DELETED on device"),
-            (folders_to_create_remote, "folders CREATED on device"),
-            (to_upload, "files UPLOADED to device"),
+            (to_delete_remote, "files DELETED on device", True),
+            (folders_to_delete_remote, "folders DELETED on device", True),
+            (folders_to_create_remote, "folders CREATED on device", False),
+            (to_upload, "files UPLOADED to device", False),
         ]
         proceed = self._confirm_mirror(actions)
         if not proceed:
             return
 
         progress = tqdm(
-            total=sum(len(items) for items, _ in actions),
+            total=sum(len(items) for items, _, _ in actions),
             desc="Mirroring",
             unit="items",
         )
