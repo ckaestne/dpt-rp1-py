@@ -1004,11 +1004,17 @@ class DigitalPaper:
         if total == 0:
             print("Already in sync. Nothing to do.")
             return None
+        preview = 5
         print("")
         print("Planned changes:")
         for items, description in actions:
-            if items:
-                print(f"  {len(items):4d} {description}")
+            if not items:
+                continue
+            print(f"  {len(items):4d} {description}:")
+            for item in items[:preview]:
+                print(f"       {item}")
+            if len(items) > preview:
+                print(f"       ... and {len(items) - preview} more")
         print("")
         if self.assume_yes:
             return True
